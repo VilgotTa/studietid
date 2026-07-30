@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studietid</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#111111">
+<link rel="icon" href="icon-192.png">
+<style>
+  body{font-family:-apple-system,sans-serif;text-align:center;padding-top:20px;background:#111;color:#fff;padding-bottom:40px;margin:0;}
+  button{font-size:24px;padding:20px 40px;margin:10px;border-radius:12px;border:none;width:80%;cursor:pointer;}
+  #start{background:#2ecc71;color:#fff;margin-bottom:20px;}
+  #stop{background:#e74c3c;color:#fff;}
+  select, input{font-size:18px;padding:12px;margin-bottom:15px;width:80%;box-sizing:border-box;border-radius:8px;border:none;}
+  #status{margin-top:20px;font-size:18px;min-height:24px;color:#f1c40f;}
+  .section{margin-top:15px;padding-top:15px;border-top:1px solid #333;}
+  .small-btn{font-size:16px;padding:12px;width:38%;margin:5px;border-radius:8px;}
+  #add-btn{background:#3498db;color:#fff;} #rem-btn{background:#e67e22;color:#fff;}
+  #sync-badge{font-size:14px;color:#aaa;margin-top:10px;}
+</style>
+</head>
+<body>
+
+<h2>Studietid</h2>
+<div id="sync-badge">Laddar status...</div>
+
+<div id="start-section" class="section">
+  <select id="course"><option>Laddar kategorier...</option></select><br>
+  <button id="start" onclick="startTimer()">Starta pass</button>
+</div>
+
+<div id="stop-section" class="section" style="display:none;">
+  <h3 id="current-session-info" style="color:#2ecc71;">Pågående pass...</h3>
+  <input type="text" id="comment" placeholder="Vad gjorde du? (Frivilligt)" /><br>
+  <select id="efficiency">
+    <option value="">Hur effektiv var du? (1-5)</option>
+    <option value="1">1 - Mycket låg</option>
+    <option value="2">2 - Låg</option>
+    <option value="3">3 - Medel</option>
+    <option value="4">4 - Hög</option>
+    <option value="5">5 - Mycket hög</option>
+  </select><br>
+  <button id="stop" onclick="stopTimer()">Stoppa & Spara</button>
+</div>
+
+<div id="status"></div>
+
+<div class="section">
+  <h3>Hantera kategorier</h3>
+  <input type="text" id="new-category" placeholder="Ny kategori..." /><br>
+  <button id="add-btn" class="small-btn" onclick="addCategory()">Lägg till</button>
+  <button id="rem-btn" class="small-btn" onclick="removeCategory()">Ta bort vald</button>
+</div>
+
+<script>
+// ====== KONFIGURATION ======
+// Byt ut mot din Apps Script-webbapps-URL (måste sluta på /exec)
+var API_URL = 'KLISTRA_IN_DIN_APPS_SCRIPT_URL_HÄR';
+// Samma token som TOKEN-konstanten i Apps Script-koden
+var API_TOKEN = 'BYT_TILL_EN_EGEN_HEMLIG_KOD';
+// ============================
+
+window.onload = function () {
+  loadCategoriesLocally();
+  updateUI();
+  syncQueue();
+  fetchCategories();
+};
+
+function apiGet(action) {
+  return fetch(API_URL + '?action=' + action + '&token=' + encodeURIComponent(API_TOKEN))
+    .then(function (r) { return r.json(); });
+}
+
+function apiPost(payload) {
+  payload.token = API_TOKEN;
+  return fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // undviker CORS-preflight
+    body: JSON.stringify(payload),
+  }).then(function (r) { return r.json(); });
+}
+
+function fetchCategories() {
+  apiGet('getCategories')
+    .then(function (cats) {
+      if (Array.isArray(cats)) saveCategoriesLocally(cats);
+    })
+    .catch(function () { /* offline - kör vidare på lokala kategorier */ });
+}
+
+function updateUI() {
+  var startMs = localStorage.getItem('running_start');
+  var course = localStorage.getItem('running_course');
+  if (startMs) {
+    document.getElementById('start-section').style.display = 'none';
+    document.getElementById('stop-section').style.display = 'block';
+    document.getElementById('current-session-info').innerText = 'Kör: ' + course;
+  } else {
+    document.getElementById('start-section').style.display = 'block';
+    document.getElementById('stop-section').style.display = 'none';
+  }
+  updateSyncBadge();
+}
+
+function updateSyncBadge() {
+  var queue = JSON.parse(localStorage.getItem('sync_queue') || '[]');
+  var badge = document.getElementById('sync-badge');
+  if (queue.length > 0) {
+    badge.innerText = '⏳ ' + queue.length + ' pass väntar på synk (Offline)';
+    badge.style.color = '#e67e22';
+  } else {
+    badge.innerText = '✓ Allt synkat';
+    badge.style.color = '#aaa';
+  }
+}
+
+function startTimer() {
+  var c = document.getElementById('course').value;
+  localStorage.setItem('running_course', c);
+  localStorage.setItem('running_start', new Date().getTime());
+  document.getElementById('status').innerText = 'Startade lokalt!';
+  setTimeout(function () { document.getElementById('status').innerText = ''; }, 2000);
+  updateUI();
+}
+
+function stopTimer() {
+  var startMs = parseInt(localStorage.getItem('running_start'));
+  var course = localStorage.getItem('running_course');
+  var stopMs = new Date().getTime();
+  var minutes = Math.round((stopMs - startMs) / 60000);
+  var comment = document.getElementById('comment').value;
+  var efficiency = document.getElementById('efficiency').value;
+
+  var session = {
+    course: course, start: startMs, stop: stopMs,
+    minutes: minutes, comment: comment, efficiency: efficiency,
+  };
+
+  var queue = JSON.parse(localStorage.getItem('sync_queue') || '[]');
+  queue.push(session);
+  localStorage.setItem('sync_queue', JSON.stringify(queue));
+
+  localStorage.removeItem('running_start');
+  localStorage.removeItem('running_course');
+  document.getElementById('comment').value = '';
+  document.getElementById('efficiency').value = '';
+  document.getElementById('status').innerText = 'Pass sparat lokalt! (' + minutes + ' min)';
+
+  updateUI();
+  syncQueue();
+}
+
+function syncQueue() {
+  if (!navigator.onLine) return;
+  var queue = JSON.parse(localStorage.getItem('sync_queue') || '[]');
+  if (queue.length === 0) return;
+
+  document.getElementById('status').innerText = 'Synkar ' + queue.length + ' pass...';
+
+  apiPost({ action: 'saveSessions', sessions: queue })
+    .then(function () {
+      localStorage.setItem('sync_queue', '[]');
+      document.getElementById('status').innerText = 'Synkad med Google Sheets!';
+      updateSyncBadge();
+      setTimeout(function () { document.getElementById('status').innerText = ''; }, 3000);
+    })
+    .catch(function () {
+      document.getElementById('status').innerText = 'Nätverksfel. Sparat lokalt, synkar senare.';
+    });
+}
+
+function loadCategoriesLocally() {
+  var cats = JSON.parse(localStorage.getItem('categories') || '[]');
+  if (cats.length > 0) renderCategories(cats);
+}
+
+function saveCategoriesLocally(cats) {
+  localStorage.setItem('categories', JSON.stringify(cats));
+  renderCategories(cats);
+}
+
+function renderCategories(cats) {
+  var sel = document.getElementById('course');
+  sel.innerHTML = '';
+  for (var i = 0; i < cats.length; i++) {
+    var opt = document.createElement('option');
+    opt.value = cats[i]; opt.innerText = cats[i];
+    sel.appendChild(opt);
+  }
+}
+
+function addCategory() {
+  var newVal = document.getElementById('new-category').value.trim();
+  if (!newVal) return;
+  document.getElementById('status').innerText = 'Lägger till...';
+  apiPost({ action: 'addCat', name: newVal })
+    .then(function (cats) {
+      saveCategoriesLocally(cats);
+      document.getElementById('new-category').value = '';
+      document.getElementById('status').innerText = 'Kategori tillagd!';
+    })
+    .catch(function () {
+      document.getElementById('status').innerText = 'Kunde inte lägga till (offline?).';
+    });
+}
+
+function removeCategory() {
+  var selVal = document.getElementById('course').value;
+  if (!selVal) return;
+  if (!confirm('Vill du ta bort: ' + selVal + '?')) return;
+  document.getElementById('status').innerText = 'Tar bort...';
+  apiPost({ action: 'removeCat', name: selVal })
+    .then(function (cats) {
+      saveCategoriesLocally(cats);
+      document.getElementById('status').innerText = 'Kategori borttagen!';
+    })
+    .catch(function () {
+      document.getElementById('status').innerText = 'Kunde inte ta bort (offline?).';
+    });
+}
+
+window.addEventListener('online', syncQueue);
+</script>
+</body>
+</html>
