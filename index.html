@@ -16,7 +16,7 @@
   #status{margin-top:20px;font-size:18px;min-height:24px;color:#f1c40f;}
   .section{margin-top:15px;padding-top:15px;border-top:1px solid #333;}
   .small-btn{font-size:16px;padding:12px;width:38%;margin:5px;border-radius:8px;}
-  #add-btn{background:#3498db;color:#fff;} #rem-btn{background:#e67e22;color:#fff;}
+  #add-btn{background:#3498db;color:#fff;} #archive-btn{background:#9b59b6;color:#fff;} #rem-btn{background:#e67e22;color:#fff;}
   #sync-badge{font-size:14px;color:#aaa;margin-top:10px;}
 </style>
 </head>
@@ -50,7 +50,14 @@
   <h3>Hantera kategorier</h3>
   <input type="text" id="new-category" placeholder="Ny kategori..." /><br>
   <button id="add-btn" class="small-btn" onclick="addCategory()">Lägg till</button>
+  <button id="archive-btn" class="small-btn" onclick="archiveCategory()">Arkivera vald</button>
   <button id="rem-btn" class="small-btn" onclick="removeCategory()">Ta bort vald</button>
+</div>
+
+<div class="section">
+  <h3>Arkiverade ämnen</h3>
+  <select id="archived-course"><option value="">Inga arkiverade ämnen</option></select><br>
+  <button id="restore-btn" class="small-btn" style="width:80%;background:#2ecc71;color:#fff;" onclick="restoreCategory()">Återställ vald</button>
 </div>
 
 <script>
@@ -181,14 +188,62 @@ function saveCategoriesLocally(cats) {
   renderCategories(cats);
 }
 
+function getArchived() {
+  return JSON.parse(localStorage.getItem('archived_categories') || '[]');
+}
+
+function setArchived(names) {
+  localStorage.setItem('archived_categories', JSON.stringify(names));
+}
+
 function renderCategories(cats) {
+  // Ta bort arkiverade namn som inte längre finns bland kategorierna (t.ex. borttagna på servern).
+  var archived = getArchived().filter(function (name) { return cats.indexOf(name) !== -1; });
+  setArchived(archived);
+  var active = cats.filter(function (c) { return archived.indexOf(c) === -1; });
+
   var sel = document.getElementById('course');
   sel.innerHTML = '';
-  for (var i = 0; i < cats.length; i++) {
+  for (var i = 0; i < active.length; i++) {
     var opt = document.createElement('option');
-    opt.value = cats[i]; opt.innerText = cats[i];
+    opt.value = active[i]; opt.innerText = active[i];
     sel.appendChild(opt);
   }
+
+  var archSel = document.getElementById('archived-course');
+  archSel.innerHTML = '';
+  if (archived.length === 0) {
+    var noneOpt = document.createElement('option');
+    noneOpt.value = ''; noneOpt.innerText = 'Inga arkiverade ämnen';
+    archSel.appendChild(noneOpt);
+  } else {
+    for (var j = 0; j < archived.length; j++) {
+      var aopt = document.createElement('option');
+      aopt.value = archived[j]; aopt.innerText = archived[j];
+      archSel.appendChild(aopt);
+    }
+  }
+}
+
+function archiveCategory() {
+  var selVal = document.getElementById('course').value;
+  if (!selVal) return;
+  var archived = getArchived();
+  if (archived.indexOf(selVal) === -1) archived.push(selVal);
+  setArchived(archived);
+  renderCategories(JSON.parse(localStorage.getItem('categories') || '[]'));
+  document.getElementById('status').innerText = 'Ämne arkiverat.';
+  setTimeout(function () { document.getElementById('status').innerText = ''; }, 2000);
+}
+
+function restoreCategory() {
+  var selVal = document.getElementById('archived-course').value;
+  if (!selVal) return;
+  var archived = getArchived().filter(function (name) { return name !== selVal; });
+  setArchived(archived);
+  renderCategories(JSON.parse(localStorage.getItem('categories') || '[]'));
+  document.getElementById('status').innerText = 'Ämne återställt.';
+  setTimeout(function () { document.getElementById('status').innerText = ''; }, 2000);
 }
 
 function addCategory() {
