@@ -43,6 +43,7 @@
     <option value="5">5 - Mycket hög</option>
   </select><br>
   <button id="stop" onclick="stopTimer()">Stoppa & Spara</button>
+  <button id="discard" onclick="discardTimer()" style="background:#7f8c8d;color:#fff;font-size:16px;padding:12px 20px;width:80%;">Stoppa utan att spara</button>
 </div>
 
 <div id="status"></div>
@@ -183,6 +184,17 @@ function stopTimer() {
 
   updateUI();
   syncQueue();
+}
+
+function discardTimer() {
+  if (!confirm('Avbryt passet utan att spara?')) return;
+  localStorage.removeItem('running_start');
+  localStorage.removeItem('running_course');
+  document.getElementById('comment').value = '';
+  document.getElementById('efficiency').value = '';
+  document.getElementById('status').innerText = 'Pass avbrutet, sparades inte.';
+  setTimeout(function () { document.getElementById('status').innerText = ''; }, 2000);
+  updateUI();
 }
 
 function syncQueue() {
