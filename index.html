@@ -32,6 +32,7 @@
 
 <div id="stop-section" class="section" style="display:none;">
   <h3 id="current-session-info" style="color:#2ecc71;">Pågående pass...</h3>
+  <div id="timer" style="font-size:36px;font-weight:bold;margin-bottom:15px;">00:00:00</div>
   <input type="text" id="comment" placeholder="Vad gjorde du? (Frivilligt)" /><br>
   <select id="efficiency">
     <option value="">Hur effektiv var du? (1-5)</option>
@@ -97,6 +98,22 @@ function fetchCategories() {
     .catch(function () { /* offline - kör vidare på lokala kategorier */ });
 }
 
+var timerInterval = null;
+
+function formatElapsed(ms) {
+  var totalSec = Math.floor(ms / 1000);
+  var h = Math.floor(totalSec / 3600);
+  var m = Math.floor((totalSec % 3600) / 60);
+  var s = totalSec % 60;
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  return pad(h) + ':' + pad(m) + ':' + pad(s);
+}
+
+function tickTimer() {
+  var startMs = parseInt(localStorage.getItem('running_start'));
+  document.getElementById('timer').innerText = formatElapsed(new Date().getTime() - startMs);
+}
+
 function updateUI() {
   var startMs = localStorage.getItem('running_start');
   var course = localStorage.getItem('running_course');
@@ -104,9 +121,18 @@ function updateUI() {
     document.getElementById('start-section').style.display = 'none';
     document.getElementById('stop-section').style.display = 'block';
     document.getElementById('current-session-info').innerText = 'Kör: ' + course;
+    if (!timerInterval) {
+      tickTimer();
+      timerInterval = setInterval(tickTimer, 1000);
+    }
   } else {
     document.getElementById('start-section').style.display = 'block';
     document.getElementById('stop-section').style.display = 'none';
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+    document.getElementById('timer').innerText = '00:00:00';
   }
   updateSyncBadge();
 }
