@@ -66,7 +66,7 @@
 <script>
 // ====== KONFIGURATION ======
 // Byt ut mot din Apps Script-webbapps-URL (måste sluta på /exec)
-var API_URL = 'https://script.google.com/macros/s/AKfycbxF-8djyNu0PYh6TgCTVcP0YoWMbQCO-Xu2UXnoXzn6NLBfcW1cptPQrLQvqkmv1w23yQ/exec';
+var API_URL = 'https://script.google.com/macros/s/AKfycbyk5eGIeF5fCQwM666EG_rTQjG-hkcep5hUbL7iwn2tEIgBJxfC4C4J4PXYNF8ZdOX6yQ/exec';
 // Samma token som TOKEN-konstanten i Apps Script-koden
 var API_TOKEN = 'Superstudent';
 // ============================
@@ -74,13 +74,13 @@ var API_TOKEN = 'Superstudent';
 window.onload = function () {
   loadCategoriesLocally();
   updateUI();
-  syncQueue();
-  fetchCategories();
+  syncAll();
 };
 
 function apiGet(action) {
-  return fetch(API_URL + '?action=' + action + '&token=' + encodeURIComponent(API_TOKEN))
-    .then(function (r) { return r.json(); });
+  return fetch(API_URL + '?action=' + action + '&token=' + encodeURIComponent(API_TOKEN), {
+    signal: AbortSignal.timeout(15000),
+  }).then(function (r) { return r.json(); });
 }
 
 function apiPost(payload) {
@@ -89,15 +89,82 @@ function apiPost(payload) {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // undviker CORS-preflight
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(15000),
   }).then(function (r) { return r.json(); });
 }
 
-function fetchCategories() {
-  apiGet('getCategories')
-    .then(function (cats) {
-      if (Array.isArray(cats)) saveCategoriesLocally(cats);
+// Räknas upp vid varje lokal start/stopp så att ett svar från servern som hann bli gammalt inte skriver över det.
+var runningEpoch = 0;
+
+function markRunningChanged() {
+  runningEpoch++;
+  localStorage.setItem('running_dirty', '1');
+}
+
+function fetchState() {
+  var epoch = runningEpoch;
+  return apiGet('getState')
+    .then(function (state) { applyState(state, epoch); })
+    .catch(function () { /* offline - kör vidare på lokala data */ });
+}
+
+function applyState(state, epoch) {
+  if (!state || !Array.isArray(state.categories)) return;
+  var archived = Array.isArray(state.archived) ? state.archived : [];
+
+  var catsJson = JSON.stringify(state.categories);
+  var archivedChanged = JSON.stringify(archived) !== JSON.stringify(getArchived());
+  if (catsJson !== localStorage.getItem('categories') || archivedChanged) {
+    localStorage.setItem('categories', catsJson);
+    setArchived(archived);
+    renderCategories(state.categories);
+  }
+
+  // Pågående pass: servern gäller, förutom när den här enheten har en ännu ej uppladdad ändring.
+  if (epoch !== runningEpoch || localStorage.getItem('running_dirty')) return;
+  var remote = state.running;
+  var local = localStorage.getItem('running_start');
+  if (remote && typeof remote.start === 'number') {
+    if (String(remote.start) !== local) {
+      localStorage.setItem('running_start', remote.start);
+      localStorage.setItem('running_course', remote.course || '');
+      updateUI();
+    }
+  } else if (local) {
+    localStorage.removeItem('running_start');
+    localStorage.removeItem('running_course');
+    document.getElementById('comment').value = '';
+    document.getElementById('efficiency').value = '';
+    updateUI();
+  }
+}
+
+function syncRunning() {
+  if (!navigator.onLine || !localStorage.getItem('running_dirty')) return Promise.resolve();
+  var epoch = runningEpoch;
+  var startMs = localStorage.getItem('running_start');
+  var req = startMs
+    ? apiPost({ action: 'startSession', start: parseInt(startMs), course: localStorage.getItem('running_course') || '' })
+    : apiPost({ action: 'clearRunning' });
+  return req
+    .then(function (state) {
+      if (state && state.error) return;
+      if (epoch === runningEpoch) localStorage.removeItem('running_dirty');
     })
-    .catch(function () { /* offline - kör vidare på lokala kategorier */ });
+    .catch(function () { /* försöker igen vid nästa synk */ });
+}
+
+// Allt som pratar med servern går i kö, så start/stopp/sparning når servern i rätt ordning.
+var syncChain = Promise.resolve();
+
+function syncAll() {
+  syncChain = syncChain
+    .then(function () { return syncQueue(); })
+    .then(syncRunning)
+    .then(fetchState)
+    .then(fetchStats)
+    .catch(function () {});
+  return syncChain;
 }
 
 var timerInterval = null;
@@ -168,9 +235,11 @@ function startTimer() {
   var c = document.getElementById('course').value;
   localStorage.setItem('running_course', c);
   localStorage.setItem('running_start', new Date().getTime());
+  markRunningChanged();
   document.getElementById('status').innerText = 'Startade lokalt!';
   setTimeout(function () { document.getElementById('status').innerText = ''; }, 2000);
   updateUI();
+  syncAll();
 }
 
 function stopTimer() {
@@ -189,40 +258,42 @@ function stopTimer() {
   var queue = JSON.parse(localStorage.getItem('sync_queue') || '[]');
   queue.push(session);
   localStorage.setItem('sync_queue', JSON.stringify(queue));
-  addToHistory(session);
-
   localStorage.removeItem('running_start');
   localStorage.removeItem('running_course');
+  markRunningChanged();
   document.getElementById('comment').value = '';
   document.getElementById('efficiency').value = '';
   document.getElementById('status').innerText = 'Pass sparat lokalt! (' + minutes + ' min)';
 
   updateUI();
   updateStats();
-  syncQueue();
+  syncAll();
 }
 
 function discardTimer() {
   if (!confirm('Avbryt passet utan att spara?')) return;
   localStorage.removeItem('running_start');
   localStorage.removeItem('running_course');
+  markRunningChanged();
   document.getElementById('comment').value = '';
   document.getElementById('efficiency').value = '';
   document.getElementById('status').innerText = 'Pass avbrutet, sparades inte.';
   setTimeout(function () { document.getElementById('status').innerText = ''; }, 2000);
   updateUI();
+  syncAll();
 }
 
 function syncQueue() {
-  if (!navigator.onLine) return;
+  if (!navigator.onLine) return Promise.resolve();
   var queue = JSON.parse(localStorage.getItem('sync_queue') || '[]');
-  if (queue.length === 0) return;
+  if (queue.length === 0) return Promise.resolve();
 
   document.getElementById('status').innerText = 'Synkar ' + queue.length + ' pass...';
 
-  apiPost({ action: 'saveSessions', sessions: queue })
+  return apiPost({ action: 'saveSessions', sessions: queue })
     .then(function () {
       localStorage.setItem('sync_queue', '[]');
+      statsStale = true;
       document.getElementById('status').innerText = 'Synkad med Google Sheets!';
       updateSyncBadge();
       setTimeout(function () { document.getElementById('status').innerText = ''; }, 3000);
@@ -257,14 +328,17 @@ function renderCategories(cats) {
   var active = cats.filter(function (c) { return archived.indexOf(c) === -1; });
 
   var sel = document.getElementById('course');
+  var prevCourse = sel.value;
   sel.innerHTML = '';
   for (var i = 0; i < active.length; i++) {
     var opt = document.createElement('option');
     opt.value = active[i]; opt.innerText = active[i];
     sel.appendChild(opt);
   }
+  if (active.indexOf(prevCourse) !== -1) sel.value = prevCourse;
 
   var archSel = document.getElementById('archived-course');
+  var prevArchived = archSel.value;
   archSel.innerHTML = '';
   if (archived.length === 0) {
     var noneOpt = document.createElement('option');
@@ -276,23 +350,28 @@ function renderCategories(cats) {
       aopt.value = archived[j]; aopt.innerText = archived[j];
       archSel.appendChild(aopt);
     }
+    if (archived.indexOf(prevArchived) !== -1) archSel.value = prevArchived;
   }
 
   updateStats();
 }
 
-function getHistory() {
-  return JSON.parse(localStorage.getItem('session_history') || '[]');
-}
+var statsStale = true;
+var lastStatsFetch = 0;
 
-function addToHistory(session) {
-  var history = getHistory();
-  history.push({
-    course: session.course,
-    minutes: session.minutes,
-    date: new Date(session.stop).toLocaleDateString('sv-SE'),
-  });
-  localStorage.setItem('session_history', JSON.stringify(history));
+// Statistiken hämtas från Google Sheet (summerad per dag och ämne) och cachas lokalt för offline-läge.
+function fetchStats() {
+  if (!navigator.onLine) return Promise.resolve();
+  if (!statsStale && Date.now() - lastStatsFetch < 60000) return Promise.resolve();
+  return apiGet('getStats')
+    .then(function (res) {
+      if (!res || !Array.isArray(res.rows)) return;
+      localStorage.setItem('stats_cache', JSON.stringify(res.rows));
+      statsStale = false;
+      lastStatsFetch = Date.now();
+      updateStats();
+    })
+    .catch(function () { /* offline - visar senast hämtade siffror */ });
 }
 
 function formatMinutes(min) {
@@ -306,11 +385,21 @@ function updateStats() {
   if (!statsEl) return;
   var course = document.getElementById('course').value;
   var today = new Date().toLocaleDateString('sv-SE');
-  var history = getHistory();
+
+  // Sparade pass från sheetet plus pass som ännu väntar på synk på den här enheten.
+  var rows = JSON.parse(localStorage.getItem('stats_cache') || '[]');
+  var queue = JSON.parse(localStorage.getItem('sync_queue') || '[]');
+  for (var q = 0; q < queue.length; q++) {
+    rows.push({
+      date: new Date(queue[q].start).toLocaleDateString('sv-SE'),
+      course: queue[q].course,
+      minutes: queue[q].minutes,
+    });
+  }
 
   var todayCourseMin = 0, totalCourseMin = 0, todayAllMin = 0, totalAllMin = 0;
-  for (var i = 0; i < history.length; i++) {
-    var h = history[i];
+  for (var i = 0; i < rows.length; i++) {
+    var h = rows[i];
     totalAllMin += h.minutes;
     if (h.date === today) todayAllMin += h.minutes;
     if (h.course === course) {
@@ -319,33 +408,39 @@ function updateStats() {
     }
   }
 
-  statsEl.innerHTML = course
-    ? ('Idag i ' + course + ': ' + formatMinutes(todayCourseMin) + '<br>' +
-       'Totalt i ' + course + ': ' + formatMinutes(totalCourseMin) + '<br>' +
-       'Idag totalt: ' + formatMinutes(todayAllMin) + '<br>' +
+  statsEl.style.whiteSpace = 'pre-line';
+  statsEl.textContent = course
+    ? ('Idag i ' + course + ': ' + formatMinutes(todayCourseMin) + '\n' +
+       'Totalt i ' + course + ': ' + formatMinutes(totalCourseMin) + '\n' +
+       'Idag totalt: ' + formatMinutes(todayAllMin) + '\n' +
        'Totalt: ' + formatMinutes(totalAllMin))
     : '';
+}
+
+function changeArchive(action, name, doneText, failText) {
+  document.getElementById('status').innerText = '...';
+  apiPost({ action: action, name: name })
+    .then(function (state) {
+      if (!state || state.error) throw new Error('bad response');
+      applyState(state, runningEpoch);
+      document.getElementById('status').innerText = doneText;
+      setTimeout(function () { document.getElementById('status').innerText = ''; }, 2000);
+    })
+    .catch(function () {
+      document.getElementById('status').innerText = failText;
+    });
 }
 
 function archiveCategory() {
   var selVal = document.getElementById('course').value;
   if (!selVal) return;
-  var archived = getArchived();
-  if (archived.indexOf(selVal) === -1) archived.push(selVal);
-  setArchived(archived);
-  renderCategories(JSON.parse(localStorage.getItem('categories') || '[]'));
-  document.getElementById('status').innerText = 'Ämne arkiverat.';
-  setTimeout(function () { document.getElementById('status').innerText = ''; }, 2000);
+  changeArchive('archiveCat', selVal, 'Ämne arkiverat.', 'Kunde inte arkivera (offline?).');
 }
 
 function restoreCategory() {
   var selVal = document.getElementById('archived-course').value;
   if (!selVal) return;
-  var archived = getArchived().filter(function (name) { return name !== selVal; });
-  setArchived(archived);
-  renderCategories(JSON.parse(localStorage.getItem('categories') || '[]'));
-  document.getElementById('status').innerText = 'Ämne återställt.';
-  setTimeout(function () { document.getElementById('status').innerText = ''; }, 2000);
+  changeArchive('restoreCat', selVal, 'Ämne återställt.', 'Kunde inte återställa (offline?).');
 }
 
 function addCategory() {
@@ -378,7 +473,14 @@ function removeCategory() {
     });
 }
 
-window.addEventListener('online', syncQueue);
+function refreshNow() {
+  statsStale = true;
+  syncAll();
+}
+
+window.addEventListener('online', refreshNow);
+document.addEventListener('visibilitychange', function () { if (!document.hidden) refreshNow(); });
+setInterval(function () { if (!document.hidden) syncAll(); }, 20000);
 </script>
 </body>
 </html>
