@@ -178,21 +178,9 @@ function formatElapsed(ms) {
   return pad(h) + ':' + pad(m) + ':' + pad(s);
 }
 
-var MENUBAR_URL = 'http://127.0.0.1:8765';
-
-function pingMenubar() {
-  var startMs = localStorage.getItem('running_start');
-  var url = startMs
-    ? MENUBAR_URL + '/start?start=' + startMs + '&course=' + encodeURIComponent(localStorage.getItem('running_course') || '')
-    : MENUBAR_URL + '/stop';
-  fetch(url, { mode: 'no-cors' }).catch(function () { /* menyrads-appen körs inte */ });
-}
-
 function tickTimer() {
   var startMs = parseInt(localStorage.getItem('running_start'));
-  var elapsed = new Date().getTime() - startMs;
-  document.getElementById('timer').innerText = formatElapsed(elapsed);
-  if (Math.floor(elapsed / 1000) % 30 === 0) pingMenubar();
+  document.getElementById('timer').innerText = formatElapsed(new Date().getTime() - startMs);
 }
 
 function updateUI() {
@@ -215,7 +203,6 @@ function updateUI() {
     }
     document.getElementById('timer').innerText = '00:00:00';
   }
-  pingMenubar();
   updateSyncBadge();
 }
 
