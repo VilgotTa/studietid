@@ -26,7 +26,8 @@
 <div id="sync-badge">Laddar status...</div>
 
 <div id="start-section" class="section">
-  <select id="course"><option>Laddar kategorier...</option></select><br>
+  <select id="course" onchange="updateStats()"><option>Laddar kategorier...</option></select><br>
+  <div id="stats" style="font-size:14px;color:#bbb;margin-bottom:15px;text-align:left;padding:0 10%;line-height:1.6;"></div>
   <button id="start" onclick="startTimer()">Starta pass</button>
 </div>
 
@@ -110,9 +111,21 @@ function formatElapsed(ms) {
   return pad(h) + ':' + pad(m) + ':' + pad(s);
 }
 
+var MENUBAR_URL = 'http://127.0.0.1:8765';
+
+function pingMenubar() {
+  var startMs = localStorage.getItem('running_start');
+  var url = startMs
+    ? MENUBAR_URL + '/start?start=' + startMs + '&course=' + encodeURIComponent(localStorage.getItem('running_course') || '')
+    : MENUBAR_URL + '/stop';
+  fetch(url, { mode: 'no-cors' }).catch(function () { /* menyrads-appen körs inte */ });
+}
+
 function tickTimer() {
   var startMs = parseInt(localStorage.getItem('running_start'));
-  document.getElementById('timer').innerText = formatElapsed(new Date().getTime() - startMs);
+  var elapsed = new Date().getTime() - startMs;
+  document.getElementById('timer').innerText = formatElapsed(elapsed);
+  if (Math.floor(elapsed / 1000) % 30 === 0) pingMenubar();
 }
 
 function updateUI() {
@@ -135,6 +148,7 @@ function updateUI() {
     }
     document.getElementById('timer').innerText = '00:00:00';
   }
+  pingMenubar();
   updateSyncBadge();
 }
 
@@ -175,6 +189,7 @@ function stopTimer() {
   var queue = JSON.parse(localStorage.getItem('sync_queue') || '[]');
   queue.push(session);
   localStorage.setItem('sync_queue', JSON.stringify(queue));
+  addToHistory(session);
 
   localStorage.removeItem('running_start');
   localStorage.removeItem('running_course');
@@ -183,6 +198,7 @@ function stopTimer() {
   document.getElementById('status').innerText = 'Pass sparat lokalt! (' + minutes + ' min)';
 
   updateUI();
+  updateStats();
   syncQueue();
 }
 
@@ -261,6 +277,54 @@ function renderCategories(cats) {
       archSel.appendChild(aopt);
     }
   }
+
+  updateStats();
+}
+
+function getHistory() {
+  return JSON.parse(localStorage.getItem('session_history') || '[]');
+}
+
+function addToHistory(session) {
+  var history = getHistory();
+  history.push({
+    course: session.course,
+    minutes: session.minutes,
+    date: new Date(session.stop).toLocaleDateString('sv-SE'),
+  });
+  localStorage.setItem('session_history', JSON.stringify(history));
+}
+
+function formatMinutes(min) {
+  var h = Math.floor(min / 60);
+  var m = min % 60;
+  return h > 0 ? (h + ' h ' + m + ' min') : (m + ' min');
+}
+
+function updateStats() {
+  var statsEl = document.getElementById('stats');
+  if (!statsEl) return;
+  var course = document.getElementById('course').value;
+  var today = new Date().toLocaleDateString('sv-SE');
+  var history = getHistory();
+
+  var todayCourseMin = 0, totalCourseMin = 0, todayAllMin = 0, totalAllMin = 0;
+  for (var i = 0; i < history.length; i++) {
+    var h = history[i];
+    totalAllMin += h.minutes;
+    if (h.date === today) todayAllMin += h.minutes;
+    if (h.course === course) {
+      totalCourseMin += h.minutes;
+      if (h.date === today) todayCourseMin += h.minutes;
+    }
+  }
+
+  statsEl.innerHTML = course
+    ? ('Idag i ' + course + ': ' + formatMinutes(todayCourseMin) + '<br>' +
+       'Totalt i ' + course + ': ' + formatMinutes(totalCourseMin) + '<br>' +
+       'Idag totalt: ' + formatMinutes(todayAllMin) + '<br>' +
+       'Totalt: ' + formatMinutes(totalAllMin))
+    : '';
 }
 
 function archiveCategory() {
