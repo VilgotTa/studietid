@@ -312,7 +312,10 @@ function renderCategories(cats) {
   // Ta bort arkiverade namn som inte längre finns bland kategorierna (t.ex. borttagna på servern).
   var archived = getArchived().filter(function (name) { return cats.indexOf(name) !== -1; });
   setArchived(archived);
-  var active = cats.filter(function (c) { return archived.indexOf(c) === -1; });
+  var bySwedish = function (a, b) { return a.localeCompare(b, 'sv'); };
+  var active = cats.filter(function (c) { return archived.indexOf(c) === -1 && c !== 'Övrigt'; }).sort(bySwedish);
+  if (cats.indexOf('Övrigt') !== -1 && archived.indexOf('Övrigt') === -1) active.push('Övrigt');
+  archived = archived.slice().sort(bySwedish);
 
   var sel = document.getElementById('course');
   var prevCourse = sel.value;
