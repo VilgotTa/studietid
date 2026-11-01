@@ -33,9 +33,32 @@ func refresh() {
     }
 }
 
-func route(_ request: String) {
+// Webbappens filer serveras från repo-mappen (en nivå över binären), eller från mappen som anges som första argument.
+let webRoot: URL = {
+    if CommandLine.arguments.count > 1 { return URL(fileURLWithPath: CommandLine.arguments[1]) }
+    let exe = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
+    return exe.standardizedFileURL.deletingLastPathComponent().deletingLastPathComponent()
+}()
+
+let webFiles: [String: (name: String, type: String)] = [
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/manifest.json": ("manifest.json", "application/manifest+json"),
+    "/icon-192.png": ("icon-192.png", "image/png"),
+    "/icon-512.png": ("icon-512.png", "image/png"),
+]
+
+struct Reply {
+    var status = 200
+    var type = "text/plain"
+    var body = Data()
+}
+
+func route(_ request: String) -> Reply {
     let parts = request.split(separator: " ", maxSplits: 2)
-    guard parts.count >= 2, let comps = URLComponents(string: "http://localhost" + parts[1]) else { return }
+    guard parts.count >= 2, let comps = URLComponents(string: "http://localhost" + parts[1]) else {
+        return Reply(status: 400)
+    }
     switch comps.path {
     case "/start":
         let items = comps.queryItems ?? []
@@ -43,23 +66,33 @@ func route(_ request: String) {
             startMs = ms
             course = String((items.first(where: { $0.name == "course" })?.value ?? "").prefix(80))
         }
+        refresh()
+        return Reply()
     case "/stop":
         startMs = nil
         course = ""
+        refresh()
+        return Reply()
     default:
-        break
+        if let file = webFiles[comps.path],
+           let data = try? Data(contentsOf: webRoot.appendingPathComponent(file.name)) {
+            return Reply(status: 200, type: file.type, body: data)
+        }
+        return Reply(status: 404)
     }
-    refresh()
 }
 
 func handle(_ conn: NWConnection) {
     conn.start(queue: .main)
     conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, _ in
+        var reply = Reply(status: 400)
         if let data = data, let request = String(data: data, encoding: .utf8) {
-            route(request)
+            reply = route(request)
         }
-        let response = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Allow-Private-Network: true\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        conn.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in conn.cancel() })
+        let head = "HTTP/1.1 \(reply.status) \(reply.status == 200 ? "OK" : "Error")\r\nContent-Type: \(reply.type)\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Private-Network: true\r\nContent-Length: \(reply.body.count)\r\nConnection: close\r\n\r\n"
+        var out = head.data(using: .utf8)!
+        out.append(reply.body)
+        conn.send(content: out, completion: .contentProcessed { _ in conn.cancel() })
     }
 }
 
